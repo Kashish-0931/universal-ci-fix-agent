@@ -1,0 +1,21 @@
+name: Universal CI/CD Fix Agent
+description: Fix CI/CD failures and open PR automatically
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout failed repo
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: pip install -r ${{ github.action_path }}/requirements.txt
+      shell: bash
+
+    - name: Run fix agent
+      run: python ${{ github.action_path }}/agent/main.py
+      shell: bash
