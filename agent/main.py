@@ -1,10 +1,10 @@
-from parser import extract_failure
-from llm import ask_llm
-from patcher import apply_patch
-from validator import validate
-from confidence import compute_confidence
-from git_ops import create_pr
-from cd_advisor import analyze_cd_failure
+from .parser import extract_failure
+from .llm import ask_llm
+from .patcher import apply_patch
+from .validator import validate
+from .confidence import compute_confidence
+from .git_ops import create_pr
+from .cd_advisor import analyze_cd_failure
 
 failure_type, failure = extract_failure()
 
