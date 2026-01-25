@@ -1,8 +1,13 @@
 from pathlib import Path
 
-LOG_FILE = "error.log"
+CI_LOG = "error.log"
+CD_LOG = "deploy.log"
 
 def extract_failure():
-    if not Path(LOG_FILE).exists():
-        return None
-    return Path(LOG_FILE).read_text()
+    if Path(CI_LOG).exists():
+        return "ci", Path(CI_LOG).read_text()
+
+    if Path(CD_LOG).exists():
+        return "cd", Path(CD_LOG).read_text()
+
+    return None, None
