@@ -3,12 +3,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 
-from agent.llm import ask_llm
-from agent.patcher import apply_patch
-from agent.validator import validate
-from agent.confidence import compute_confidence
-from agent.git_ops import create_pr
-from agent.cd_advisor import analyze_cd_failure
+from .llm import ask_llm
+from .patcher import apply_patch
+from .validator import validate
+from .confidence import compute_confidence
+from .git_ops import create_pr
+from .cd_advisor import analyze_cd_failure
 
 app2 = FastAPI(title="Universal CI/CD LLM Agent")
 
