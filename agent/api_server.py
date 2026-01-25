@@ -1,6 +1,7 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Dict, List
+from typing import List
 
 from llm import ask_llm
 from patcher import apply_patch
@@ -28,53 +29,55 @@ class CDRequest(BaseModel):
 class CDResponse(BaseModel):
     explanation: str
 
+# ---------------- Root ----------------
 
 @app.get("/")
 def root():
     return {"message": "Universal CI/CD LLM Agent running"}
-
 
 # ---------------- CI Endpoint ----------------
 
 @app.post("/ci", response_model=CIResponse)
 def handle_ci(request: CIRequest):
     try:
-        result = ask_llm(request.log)
+        # Correct unpacking of tuple
+        filename, code, command, llm_confidence = ask_llm(request.log)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Apply file changes
-    files = result["files_to_change"]
-    for filename, content in files.items():
-        apply_patch(filename, content)
+    # Apply patch
+    apply_patch(filename, code)
 
-    # Validate fix
-    if not validate(result["command"]):
+    # Validate the applied fix
+    if not validate(command):
         raise HTTPException(
             status_code=400,
             detail="Fix failed validation"
         )
 
+    # Compute confidence
     confidence = compute_confidence(
         validated=True,
-        files_changed=len(files)
+        files_changed=1
     )
 
     # Create PR
-    first_file = list(files.keys())[0]
-    create_pr(first_file, confidence)
+    create_pr(filename, confidence)
 
     return CIResponse(
         status="PR_CREATED",
-        error_type=result["error_type"],
-        files_changed=list(files.keys()),
+        error_type="ci",  # fixed, since ask_llm tuple does not return error_type
+        files_changed=[filename],
         confidence=confidence
     )
-
 
 # ---------------- CD Endpoint ----------------
 
 @app.post("/cd", response_model=CDResponse)
 def handle_cd(request: CDRequest):
-    explanation = analyze_cd_failure(request.log)
+    try:
+        explanation = analyze_cd_failure(request.log)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
     return CDResponse(explanation=explanation)
