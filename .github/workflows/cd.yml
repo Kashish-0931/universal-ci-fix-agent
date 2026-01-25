@@ -1,0 +1,19 @@
+name: CD Monitor
+
+on:
+  workflow_run:
+    workflows: ["Deploy"]
+    types: [completed]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Capture deploy logs
+        run: |
+          echo "${{ github.event.workflow_run.conclusion }}" > deploy.log
+
+      - name: Run CD advisor
+        run: python agent/main.py
