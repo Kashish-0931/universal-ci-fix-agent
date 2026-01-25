@@ -2,3 +2,8 @@ pytest
 groq
 PyGithub
 pathlib
+
+fastapi
+uvicorn
+pydantic
+requests
