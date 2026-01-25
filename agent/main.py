@@ -14,7 +14,7 @@ if not failure:
 
 # ---------------- CI FLOW (UNCHANGED) ----------------
 if failure_type == "ci":
-    filename, code, failed_cmd = ask_llm(failure)
+    filename, code, failed_cmd,confidence  = ask_llm(failure)
 
     apply_patch(filename, code)
 
