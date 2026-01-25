@@ -31,13 +31,13 @@ class CDResponse(BaseModel):
 
 # ---------------- Root ----------------
 
-@app.get("/")
+@app2.get("/")
 def root():
     return {"message": "Universal CI/CD LLM Agent running"}
 
 # ---------------- CI Endpoint ----------------
 
-@app.post("/ci", response_model=CIResponse)
+@app2.post("/ci", response_model=CIResponse)
 def handle_ci(request: CIRequest):
     try:
         # Correct unpacking of tuple
@@ -73,7 +73,7 @@ def handle_ci(request: CIRequest):
 
 # ---------------- CD Endpoint ----------------
 
-@app.post("/cd", response_model=CDResponse)
+@app2.post("/cd", response_model=CDResponse)
 def handle_cd(request: CDRequest):
     try:
         explanation = analyze_cd_failure(request.log)
