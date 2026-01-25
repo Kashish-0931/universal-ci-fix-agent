@@ -1,4 +1,7 @@
+
 from pathlib import Path
 
-def apply_patch(filename, code):
-    Path(filename).write_text(code)
+def apply_patch(filename, content):
+    path = Path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.strip() + "\n")

@@ -1,0 +1,2 @@
+Deployment failed:
+Error: Missing DATABASE_URL environment variable
