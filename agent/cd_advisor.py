@@ -1,4 +1,4 @@
-from llm import ask_llm
+from .llm import ask_llm
 
 def analyze_cd_failure(deploy_log: str):
     prompt = f"""
