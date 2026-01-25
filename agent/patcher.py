@@ -1,9 +1,7 @@
+
 from pathlib import Path
 
-def apply_patch(filename, code):
+def apply_patch(filename, content):
     path = Path(filename)
-
-    if not path.exists():
-        raise FileNotFoundError(f"LLM suggested invalid file: {filename}")
-
-    path.write_text(code)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.strip() + "\n")
