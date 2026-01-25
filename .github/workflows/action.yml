@@ -1,0 +1,44 @@
+# .github/workflows/ci-agent.yml
+name: Universal CI/CD Fix Agent
+
+on:
+  repository_dispatch:
+    types: [ci-failed]
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️ Checkout AGENT repo (this repo)
+      - name: Checkout agent repo
+        uses: actions/checkout@v4
+        with:
+          path: agent-repo
+
+      # 2️ Checkout TARGET repo (failed repo)
+      - name: Checkout failed target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.repo }}
+          ref: ${{ github.event.client_payload.branch }}
+          token: ${{ secrets.PAT }}
+          path: target-repo
+
+      # 3️ Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 4️ Install agent dependencies
+      - name: Install dependencies
+        run: |
+          cd agent-repo
+          pip install -r requirements.txt
+
+      # 5️ Run agent on target repo
+      - name: Run fix agent
+        run: |
+          cd agent-repo
+          python agent/main.py ../target-repo
