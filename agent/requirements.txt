@@ -1,0 +1,4 @@
+pytest
+groq
+PyGithub
+pathlib
