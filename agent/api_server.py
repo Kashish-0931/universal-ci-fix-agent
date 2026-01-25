@@ -10,7 +10,7 @@ from agent.confidence import compute_confidence
 from agent.git_ops import create_pr
 from agent.cd_advisor import analyze_cd_failure
 
-app = FastAPI(title="Universal CI/CD LLM Agent")
+app2 = FastAPI(title="Universal CI/CD LLM Agent")
 
 # ---------------- Schemas ----------------
 
