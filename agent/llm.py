@@ -1,77 +1,90 @@
 import os
 import json
+import re
 from pathlib import Path
 from groq import Groq
 
-# ---------- CLIENT ----------
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
-# ---------- SYSTEM PROMPT ----------
 SYSTEM_PROMPT = """
 You are an autonomous CI/CD Fixing Agent operating inside automated pipelines.
 
-STRICT RULES (DO NOT VIOLATE):
-- Output VALID JSON only (no markdown, no text)
-- Follow the schema EXACTLY
-- NEVER invent new files
-- NEVER invent dependencies
-- Modify ONLY the file mentioned in the traceback
-- If unsure, keep file content unchanged and explain why
-- Prefer NO FIX over a WRONG FIX
+TASK:
+Analyze CI/CD error logs and produce a minimal, deterministic fix or a safe suggestion.
+
+STRICT RULES:
+- NEVER hallucinate files, modules, or imports
+- NEVER invent filenames like unknown_file.py
+- NEVER modify files not mentioned in the traceback
+- Dependency errors MUST NOT create new files
+- Always be conservative and safe
+
+ERROR CLASSIFICATION:
+- ModuleNotFoundError → missing dependency
+- ImportError → missing dependency
+- NameError → typo or missing definition
+- SyntaxError → syntax issue
+- AssertionError → test failure
+- Other → unknown (give safe guidance)
 
 DEPENDENCY RULES:
-- Suggest pip/npm install ONLY if error explicitly says dependency missing
-- Do NOT suggest installs for path or import resolution issues
+- If error is ModuleNotFoundError or ImportError:
+  - Root cause is missing dependency
+  - files_to_change MUST reference the exact file from traceback
+  - Code content must be unchanged
+  - command MUST include a pip install suggestion
+  - NEVER invent filenames
 
-SCHEMA (DO NOT CHANGE):
+FIX RULES:
+- Modify ONLY the file mentioned in the traceback
+- If no code change is required, return the file unchanged
+- Always provide fix_explanation
+- Always provide at least one safe suggestion
+
+OUTPUT:
+Return VALID JSON ONLY matching this schema:
+
 {
-    "error_type": "string",
-    "error_detected": "string",
-    "root_cause": "string",
-    "fix_explanation": "string",
-    "files_to_change": { "filename": "exact replacement content" },
-    "command": ["safe shell commands only"],
-    "confidence": number
+  "error_type": "string",
+  "error_detected": "string",
+  "root_cause": "string",
+  "fix_explanation": "string",
+  "files_to_change": { "filename": "exact replacement content or <unchanged>" },
+  "command": ["safe shell commands"],
+  "confidence": number
 }
 """
 
-# ---------- ERROR CLASSIFICATION (INTERNAL ONLY) ----------
-def classify_error(error_log: str) -> str:
-    if "ModuleNotFoundError" in error_log:
-        return "module_not_found"
-    if "ImportError" in error_log:
-        return "import_error"
-    if "SyntaxError" in error_log:
-        return "syntax_error"
-    if "NameError" in error_log:
-        return "name_error"
-    if "TypeError" in error_log:
-        return "type_error"
-    if "ReferenceError" in error_log:
-        return "js_reference_error"
-    if "Cannot find module" in error_log:
-        return "node_module_missing"
-    return "unknown"
+# ------------------ HELPERS ------------------
 
-# ---------- LLM CALL ----------
+def extract_traceback_file(error_log: str) -> str | None:
+    """
+    Extract first file path from traceback.
+    """
+    match = re.search(r'File "([^"]+\.py)"', error_log)
+    if match:
+        return match.group(1)
+    return None
+
+
+def extract_missing_module(error_log: str) -> str | None:
+    """
+    Extract missing module name from ModuleNotFoundError.
+    """
+    match = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_log)
+    if match:
+        return match.group(1)
+    return None
+
+
+# ------------------ MAIN LLM CALL ------------------
+
 def ask_llm(error_log: str):
-    error_class = classify_error(error_log)
-
-    context_hint = f"""
-ERROR CLASSIFICATION: {error_class}
-
-Guidance:
-- If import/path related → suggest PYTHONPATH or relative import fix
-- If dependency missing → suggest install command
-- If unknown → do NOT modify code
-"""
-
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         temperature=0,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": context_hint},
             {"role": "user", "content": f"ERROR LOG:\n{error_log}"}
         ]
     )
@@ -79,14 +92,11 @@ Guidance:
     raw = response.choices[0].message.content.strip()
     print("\nRAW LLM OUTPUT:\n", raw)
 
-    # ---------- STRICT JSON PARSE ----------
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise ValueError("LLM did not return valid JSON")
+    data = json.loads(raw)
 
-    # ---------- SCHEMA VALIDATION ----------
-    required_keys = [
+    # ------------------ VALIDATION ------------------
+
+    REQUIRED_KEYS = {
         "error_type",
         "error_detected",
         "root_cause",
@@ -94,53 +104,66 @@ Guidance:
         "files_to_change",
         "command",
         "confidence"
-    ]
+    }
 
-    for key in required_keys:
-        if key not in data:
-            raise ValueError(f"Missing key: {key}")
+    missing = REQUIRED_KEYS - data.keys()
+    if missing:
+        raise ValueError(f"Missing required keys: {missing}")
 
     if not isinstance(data["files_to_change"], dict):
         raise ValueError("files_to_change must be an object")
 
     if len(data["files_to_change"]) != 1:
-        raise ValueError("Exactly one file must be modified")
+        raise ValueError("Exactly one file must be referenced")
 
-    # ---------- FILE PATH SAFETY ----------
     filename, code = next(iter(data["files_to_change"].items()))
-    path = Path(filename)
 
+    # 🚫 Block hallucinated filenames
+    if filename in ("unknown_file.py", "unknown.py", "file.py"):
+        raise ValueError("Hallucinated filename detected")
+
+    path = Path(filename)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"Invalid file path: {filename}")
 
-    # ---------- COMMAND SAFETY ----------
-    DANGEROUS = {
+    # ------------------ COMMAND SAFETY ------------------
+
+    DANGEROUS_COMMANDS = {
         "rm", "shutdown", "reboot", "mkfs",
         "dd", "kill", "killall", "poweroff"
     }
 
     commands = data.get("command", [])
     for cmd in commands:
-        if cmd.split()[0] in DANGEROUS:
+        if cmd.split()[0] in DANGEROUS_COMMANDS:
             raise ValueError(f"Blocked dangerous command: {cmd}")
 
-    # ---------- SMART POST-FIX GUARDS ----------
-    # Prevent wrong installs for import/path issues
-    if error_class in {"module_not_found", "import_error"}:
-        if commands and any("pip install" in c or "npm install" in c for c in commands):
-            data["command"] = ["export PYTHONPATH=."]
-            data["fix_explanation"] += " Dependency install removed; path issue suspected."
-            data["confidence"] = min(data["confidence"], 0.6)
+    # ------------------ FALLBACK CORRECTIONS ------------------
 
-    # Unknown errors → safe fallback
-    if error_class == "unknown":
-        data["command"] = []
-        data["confidence"] = min(data["confidence"], 0.4)
+    error_type = data["error_type"]
 
-    # ---------- SUGGESTED FIX (USED BY OTHER FILES) ----------
-    if data["command"]:
-        suggested_fix = " && ".join(data["command"])
+    # Dependency error fallback
+    if error_type in ("ModuleNotFoundError", "ImportError"):
+        missing_module = extract_missing_module(error_log)
+        traceback_file = extract_traceback_file(error_log)
+
+        if missing_module and not commands:
+            commands = [f"pip install {missing_module}"]
+
+        if traceback_file:
+            filename = traceback_file
+            code = "<unchanged>"
+
+    # Always ensure suggestion exists
+    if commands:
+        suggested_fix = " && ".join(commands)
     else:
         suggested_fix = data["fix_explanation"]
 
-    return filename, code, data["command"], data["confidence"], suggested_fix
+    return (
+        filename,
+        code,
+        commands,
+        data["confidence"],
+        suggested_fix
+    )
