@@ -39,41 +39,50 @@ def root():
 
 @app2.post("/ci")
 def handle_ci(request: CIRequest):
+    # Initialize defaults
+    filename, code, command, llm_confidence, suggested_fix = "unknown_file.py", "", [], 0.0, "No suggestion available"
+    pr_url = ""
+    
     try:
-        # LLM analysis
+        # 1️⃣ Ask LLM for analysis
         try:
-            filename, code, command, llm_confidence, suggested_fix = ask_llm(request.log)
-            # suggested_fix can be like: "pip install numpy"
-        except Exception:
-            filename, code, command, llm_confidence, suggested_fix = "unknown_file.py", "", [], 0.0, "No suggestion available"
-
-        # Apply patch safely
+            llm_filename, llm_code, llm_command, llm_conf, llm_suggest = ask_llm(request.log)
+            # Only overwrite defaults if LLM returned something valid
+            if llm_filename:
+                filename = llm_filename
+                code = llm_code
+                command = llm_command
+                llm_confidence = llm_conf
+                suggested_fix = llm_suggest or "Check the code for missing modules or typos"
+        except Exception as e:
+            print("LLM analysis failed:", e)
+        
+        # 2️⃣ Try to apply patch (do NOT overwrite filename/suggested_fix on failure)
         try:
             apply_patch(filename, code)
-        except Exception:
-            pass
-
-        # Validate safely
+        except Exception as e:
+            print("Patch failed:", e)
+        
+        # 3️⃣ Validate safely
         validated = False
         try:
             validated = validate(command)
-        except Exception:
-            validated = False
-
-        # Compute confidence
+        except Exception as e:
+            print("Validation failed:", e)
+        
+        # 4️⃣ Compute confidence
         confidence = compute_confidence(validated=validated, files_changed=1)
-
-        # Create PR safely
-        pr_url = ""
+        
+        # 5️⃣ Attempt PR creation, but do not overwrite filename or suggested_fix
         try:
             pr_info = create_pr(filename, confidence)
             pr_url = pr_info.get("pr_url", "")
-        except Exception:
-            pr_url = ""
-
-        # Return full info with suggested fix
+        except Exception as e:
+            print("PR creation failed:", e)
+        
+        # 6️⃣ Return full info with suggested fix
         return {
-            "status": "PR_CREATED" if pr_url else "PR_FAILED",
+            "status": "PR_CREATED" if pr_url else "SUGGESTION_READY",
             "error_type": "ci",
             "files_changed": [filename] if filename else [],
             "confidence": confidence,
@@ -81,17 +90,18 @@ def handle_ci(request: CIRequest):
             "file_path": filename,
             "line_number": 1,
             "pr_url": pr_url,
-            "suggested_fix": suggested_fix  # ✅ add this field
+            "suggested_fix": suggested_fix
         }
 
     except Exception as e:
+        # Fallback for unexpected errors
         return {
             "status": "ERROR",
             "error_type": "ci",
             "error_message": str(e),
             "files_changed": [],
             "confidence": 0.0,
-            "suggested_fix": "No suggestion available"
+            "suggested_fix": suggested_fix
         }
 
 
