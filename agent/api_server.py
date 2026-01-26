@@ -92,7 +92,7 @@ def handle_ci(request: CIRequest):
             "files_changed": [],
             "confidence": 0.0
         }
-}
+
 
 
 # ---------------- CD Endpoint ----------------
