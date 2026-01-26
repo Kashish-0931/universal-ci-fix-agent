@@ -37,10 +37,10 @@ def root():
 
 # ---------------- CI Endpoint ----------------
 
-@app2.post("/ci", response_model=CIResponse)
+@app2.post("/ci")
 def handle_ci(request: CIRequest):
     try:
-        # Correct unpacking of tuple
+        # LLM analysis
         filename, code, command, llm_confidence = ask_llm(request.log)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -48,28 +48,29 @@ def handle_ci(request: CIRequest):
     # Apply patch
     apply_patch(filename, code)
 
-    # Validate the applied fix
+    # Validate fix
     if not validate(command):
-        raise HTTPException(
-            status_code=400,
-            detail="Fix failed validation"
-        )
+        raise HTTPException(status_code=400, detail="Fix failed validation")
 
     # Compute confidence
-    confidence = compute_confidence(
-        validated=True,
-        files_changed=1
-    )
+    confidence = compute_confidence(validated=True, files_changed=1)
 
-    # Create PR
-    create_pr(filename, confidence)
+    # Create PR and get PR URL
+    pr_info = create_pr(filename, confidence)
+    pr_url = pr_info.get("pr_url", "")  # ensure create_pr returns dict with pr_url
 
-    return CIResponse(
-        status="PR_CREATED",
-        error_type="ci",  # fixed, since ask_llm tuple does not return error_type
-        files_changed=[filename],
-        confidence=confidence
-    )
+    # Return full info
+    return {
+        "status": "PR_CREATED",
+        "error_type": "ci",
+        "files_changed": [filename],
+        "confidence": confidence,
+        "error_message": request.log,       # raw error log
+        "file_path": filename,
+        "line_number": 1,                   # you can improve by detecting line from LLM in future
+        "pr_url": pr_url
+    }
+
 
 # ---------------- CD Endpoint ----------------
 
