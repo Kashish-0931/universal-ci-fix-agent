@@ -104,7 +104,8 @@ def ask_llm(error_log: str):
     filename, code = next(iter(data["files_to_change"].items()))
 
     # Block hallucinated files (except requirements.txt)
-    if filename != "requirements.txt" and not Path(filename).exists():
-        raise ValueError(f"Hallucinated file: {filename}")
+   # Allow new or nested files, but block absolute paths
+path = Path(filename)
 
-    return filename, code, command, data["confidence"]
+if path.is_absolute() or ".." in path.parts:
+    raise ValueError(f"Invalid file path: {filename}")
