@@ -58,7 +58,7 @@ def create_pr(filename, confidence):
         )
 
         pr_url = f"https://github.com/{repo}/pull/new/{branch}"
-return {"status": "success", "pr_url": pr_url, "branch": branch}
+        return {"status": "success", "pr_url": pr_url, "branch": branch}
 
         print(f"""
 PR CREATED SUCCESSFULLY
