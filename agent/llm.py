@@ -90,7 +90,7 @@ def ask_llm(error_log: str):
     if len(data["files_to_change"]) != 1:
         raise ValueError("Exactly one file change allowed")
 
-    # 🔥 ONLY CHANGE: allow all commands, block only destructive ones
+    # Allow all commands, block only destructive ones
     DANGEROUS_COMMANDS = {
         "rm", "shutdown", "reboot", "mkfs",
         "dd", "kill", "killall", "poweroff"
@@ -103,9 +103,9 @@ def ask_llm(error_log: str):
 
     filename, code = next(iter(data["files_to_change"].items()))
 
-    # Block hallucinated files (except requirements.txt)
-   # Allow new or nested files, but block absolute paths
+    # ✅ PATH CHECK MUST BE INSIDE FUNCTION
     path = Path(filename)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Invalid file path: {filename}")
 
-if path.is_absolute() or ".." in path.parts:
-    raise ValueError(f"Invalid file path: {filename}")
+    return filename, code, command, data["confidence"]
