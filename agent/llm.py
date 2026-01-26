@@ -101,4 +101,11 @@ def ask_llm(error_log: str):
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"Invalid file path: {filename}")
 
-    return filename, code, command, data["confidence"]
+    # --- NEW LINE: extract suggested fix from LLM output ---
+    # We'll use fix_explanation if command is empty, else join commands
+    if command:
+        suggested_fix = " && ".join(command)
+    else:
+        suggested_fix = data.get("fix_explanation", "No suggestion available")
+
+    return filename, code, command, data["confidence"], suggested_fix
