@@ -42,16 +42,16 @@ def handle_ci(request: CIRequest):
     try:
         # LLM analysis
         try:
-            filename, code, command, llm_confidence = ask_llm(request.log)
-        except Exception as e:
-            # Fallback if LLM fails
-            filename, code, command, llm_confidence = "unknown_file.py", "", [], 0.0
+            filename, code, command, llm_confidence, suggested_fix = ask_llm(request.log)
+            # suggested_fix can be like: "pip install numpy"
+        except Exception:
+            filename, code, command, llm_confidence, suggested_fix = "unknown_file.py", "", [], 0.0, "No suggestion available"
 
         # Apply patch safely
         try:
             apply_patch(filename, code)
         except Exception:
-            pass  # skip patch if fails
+            pass
 
         # Validate safely
         validated = False
@@ -71,7 +71,7 @@ def handle_ci(request: CIRequest):
         except Exception:
             pr_url = ""
 
-        # Return safe dict
+        # Return full info with suggested fix
         return {
             "status": "PR_CREATED" if pr_url else "PR_FAILED",
             "error_type": "ci",
@@ -80,17 +80,18 @@ def handle_ci(request: CIRequest):
             "error_message": request.log,
             "file_path": filename,
             "line_number": 1,
-            "pr_url": pr_url
+            "pr_url": pr_url,
+            "suggested_fix": suggested_fix  # ✅ add this field
         }
 
     except Exception as e:
-        # Catch everything else
         return {
             "status": "ERROR",
             "error_type": "ci",
             "error_message": str(e),
             "files_changed": [],
-            "confidence": 0.0
+            "confidence": 0.0,
+            "suggested_fix": "No suggestion available"
         }
 
 
