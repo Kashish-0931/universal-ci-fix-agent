@@ -105,7 +105,7 @@ def ask_llm(error_log: str):
 
     # Block hallucinated files (except requirements.txt)
    # Allow new or nested files, but block absolute paths
-path = Path(filename)
+    path = Path(filename)
 
 if path.is_absolute() or ".." in path.parts:
     raise ValueError(f"Invalid file path: {filename}")
