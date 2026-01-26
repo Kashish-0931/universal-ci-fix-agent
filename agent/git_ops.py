@@ -9,11 +9,11 @@ def create_pr(filename, confidence):
 
         # REQUIRED for CI
         subprocess.run(
-            ["git", "config", "--global", "user.name", "ci-agent"],
+            ["git", "config", "--global", "user.name", "universal-ci-fix-agent"],
             check=True
         )
         subprocess.run(
-            ["git", "config", "--global", "user.email", "ci-agent@users.noreply.github.com"],
+            ["git", "config", "--global", "user.email", "bhatiakashish46@gmail.com"],
             check=True
         )
 
