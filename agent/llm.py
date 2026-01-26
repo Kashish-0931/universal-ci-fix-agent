@@ -28,13 +28,12 @@ YOU MUST:
 3. Propose the minimal fix required to unblock the pipeline
 4. Specify exactly which file(s) must be modified
 5. Provide exact content to add or replace
-6. Provide the exact shell command required to apply the fix
+6. Provide the exact shell command required to apply or verify the fix (may be empty)
 7. Assign a confidence score based on certainty
 
 FILE RULES:
 - If dependency is missing → use requirements.txt
 - If requirements.txt does not exist → create it
-- Never install packages globally
 - Never modify unrelated files
 - Prefer minimal changes
 
@@ -55,9 +54,6 @@ JSON SCHEMA:
   "confidence": number
 }
 """
-
-ALLOWED_COMMANDS = {"pip", "python", "pytest"}
-
 
 def ask_llm(error_log: str):
     response = client.chat.completions.create(
@@ -94,13 +90,21 @@ def ask_llm(error_log: str):
     if len(data["files_to_change"]) != 1:
         raise ValueError("Exactly one file change allowed")
 
-    if data["command"][0] not in ALLOWED_COMMANDS:
-        raise ValueError("Unsafe command")
+    # 🔥 ONLY CHANGE: allow all commands, block only destructive ones
+    DANGEROUS_COMMANDS = {
+        "rm", "shutdown", "reboot", "mkfs",
+        "dd", "kill", "killall", "poweroff"
+    }
+
+    command = data.get("command", [])
+
+    if command and command[0] in DANGEROUS_COMMANDS:
+        raise ValueError(f"Blocked dangerous command: {command[0]}")
 
     filename, code = next(iter(data["files_to_change"].items()))
 
-    # block hallucinated files
+    # Block hallucinated files (except requirements.txt)
     if filename != "requirements.txt" and not Path(filename).exists():
         raise ValueError(f"Hallucinated file: {filename}")
 
-    return filename, code, data["command"], data["confidence"]
+    return filename, code, command, data["confidence"]
