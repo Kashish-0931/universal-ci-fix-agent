@@ -103,11 +103,18 @@ If you cannot safely fix the issue, return "<unchanged>" for files_to_change and
                 code = "<unchanged>"
 
         # ------------------ Suggested fix ------------------
-        suggested_fix = " && ".join(commands) if commands else data.get("fix_explanation", "No safe fix available")
+       # ------------------ Suggested fix ------------------
+# Always provide a code-based suggestion; ignore shell commands
+if code == "<unchanged>" or not code.strip():
+    # Try to extract the faulty line from the traceback
+    match = re.search(r'File "[^"]+", line \d+\n\s*(.+)', error_log)
+    code_line = match.group(1).strip() if match else "Check the code near reported line"
+    suggested_fix = code_line
+else:
+    suggested_fix = code
 
-        return filename, code, commands, data["confidence"], suggested_fix
+# Commands array is always empty for safety
+commands = []
 
-    else:
-        # Plain text for CD
-        return raw
-
+# Return safe output
+return filename, code, commands, data.get("confidence", 0.5), suggested_fix
