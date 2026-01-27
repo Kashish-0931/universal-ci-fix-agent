@@ -7,19 +7,23 @@ client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 # ------------------ Helpers ------------------
 
-def extract_traceback_file(error_log: str):
+def extract_file(error_log: str):
+    """Extract file path from traceback if present"""
     m = re.search(r'File "([^"]+)"', error_log)
     return m.group(1) if m else "<unknown>"
 
 def extract_missing_module(error_log: str):
+    """Detect missing module/package in any language"""
     m = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_log)
-    return m.group(1) if m else None
-
-def extract_missing_file(error_log: str):
-    m = re.search(r"No such file or directory: ['\"]([^'\"]+)['\"]", error_log)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    m = re.search(r"Cannot find module ['\"]([^'\"]+)['\"]", error_log)  # Node.js
+    if m:
+        return m.group(1)
+    return None
 
 def extract_nameerror_details(error_log: str):
+    """Detect undefined variable or function"""
     m = re.search(r"NameError: name '([^']+)' is not defined", error_log)
     if m:
         undefined_name = m.group(1)
@@ -28,131 +32,127 @@ def extract_nameerror_details(error_log: str):
         return undefined_name, suggested_name
     return None, None
 
+def extract_permission_file(error_log: str):
+    m = re.search(r"PermissionError: \[Errno \d+\] .*: '([^']+)'", error_log)
+    return m.group(1) if m else None
+
 # ------------------ Main ------------------
 
-def ask_llm(error_log: str, system_prompt: str = None, expect_json: bool = True):
+def ask_llm(error_log: str):
     """
-    Returns:
-    filename, code, commands, confidence, suggested_fix
+    Universal CI/CD error suggester.
+    Returns a list of suggestions.
+    Each suggestion: file, code, commands, confidence, suggested_fix
     """
 
-    if system_prompt is None:
-        system_prompt = """
-You are a CI/CD error fixing agent.
-
+    system_prompt = """
+You are a universal CI/CD error fixing agent.
 TASK:
-- Analyze the error log
-- Always provide a suggested fix
-- Safe minimal changes only
-- Do not invent dangerous commands or files
-
-Return JSON only:
-{
-  "error_type": "string",
-  "error_detected": "string",
-  "root_cause": "string",
-  "fix_explanation": "string",
-  "confidence": number
-}
+- Analyze any error log (Python, Node.js, Java, Go, Rust, shell, Docker, YAML, JSON, CI/CD)
+- Always provide at least one safe suggested fix
+- Never suggest destructive commands
+- Return JSON array of suggestions with keys:
+  file, code, commands, confidence, suggested_fix
 """
 
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        temperature=0,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"ERROR LOG:\n{error_log}"}
-        ]
-    )
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            temperature=0,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"ERROR LOG:\n{error_log}"}
+            ]
+        )
+        raw = response.choices[0].message.content.strip()
+        suggestions = json.loads(raw)
+        if not isinstance(suggestions, list):
+            raise ValueError
+    except Exception:
+        # fallback generic suggestion
+        suggestions = [{
+            "file": extract_file(error_log),
+            "code": "<unchanged>",
+            "commands": [],
+            "confidence": 0.5,
+            "suggested_fix": "Manual investigation required"
+        }]
 
-    raw = response.choices[0].message.content.strip()
-    print("\nRAW LLM OUTPUT:\n", raw)
+    # ------------------ Auto heuristics for common errors ------------------
 
-    if not expect_json:
-        return raw
+    result = []
 
-    data = json.loads(raw)
+    # Missing module/package
+    missing_module = extract_missing_module(error_log)
+    if missing_module:
+        result.append({
+            "file": "package/dependency list",
+            "code": "<update dependency file>",
+            "commands": [],
+            "confidence": 1.0,
+            "suggested_fix": f"Install or add missing package/module: {missing_module}"
+        })
 
-    error_type = data.get("error_type", "UnknownError")
-    confidence = float(data.get("confidence", 0.6))
-
-    # ------------------ AUTO-FIXABLE ------------------
-
-    # ModuleNotFoundError / ImportError
-    if error_type in ("ModuleNotFoundError", "ImportError"):
-        missing = extract_missing_module(error_log)
-        if missing:
-            return (
-                "requirements.txt",
-                f"{missing}\n",
-                [],
-                1.0,
-                f"Add '{missing}' to requirements.txt"
-            )
-
-    # FileNotFoundError
-    if error_type == "FileNotFoundError":
-        missing_file = extract_missing_file(error_log)
-        if missing_file:
-            return (
-                missing_file,
-                "",
-                [],
-                0.9,
-                f"Create missing file: {missing_file}"
-            )
+    # NameError / ReferenceError
+    if "NameError" in error_log or "ReferenceError" in error_log:
+        undefined_name, suggested_name = extract_nameerror_details(error_log)
+        result.append({
+            "file": extract_file(error_log),
+            "code": "<unchanged>",
+            "commands": [],
+            "confidence": 0.7,
+            "suggested_fix": f"Undefined variable/function: {undefined_name}. Did you mean: {suggested_name}"
+        })
 
     # PermissionError
-    if error_type == "PermissionError":
-        file = extract_traceback_file(error_log)
-        return (
-            file,
-            "<unchanged>",
-            [],
-            0.8,
-            "Fix file permissions in CI environment"
-        )
+    if "PermissionError" in error_log or "EACCES" in error_log:
+        file = extract_permission_file(error_log) or extract_file(error_log)
+        result.append({
+            "file": file,
+            "code": "<unchanged>",
+            "commands": [],
+            "confidence": 0.8,
+            "suggested_fix": "Fix file/directory permissions in CI environment"
+        })
 
-    # NameError: always suggest
-    if error_type == "NameError":
-        undefined_name, suggested_name = extract_nameerror_details(error_log)
-        suggested_fix = (f"Function or variable name mismatch: {suggested_name} vs {undefined_name}"
-                         if undefined_name else "Check undefined name in code")
-        return (
-            extract_traceback_file(error_log),
-            "<unchanged>",
-            [],
-            0.7,
-            suggested_fix
-        )
+    # YAML/JSON config errors
+    if "YAMLError" in error_log or "JSONDecodeError" in error_log or ".yml" in error_log or ".json" in error_log:
+        result.append({
+            "file": extract_file(error_log),
+            "code": "<unchanged>",
+            "commands": [],
+            "confidence": 0.8,
+            "suggested_fix": "Fix syntax in YAML/JSON configuration files"
+        })
 
-    # YAML/JSON errors
-    if error_type in ("YAMLError", "JSONDecodeError"):
-        file = extract_traceback_file(error_log)
-        return (
-            file,
-            "<unchanged>",
-            [],
-            0.8,
-            "Fix syntax error in configuration file"
-        )
+    # Version mismatch errors
+    if re.search(r"version mismatch|unsupported version", error_log, re.IGNORECASE):
+        result.append({
+            "file": "<unchanged>",
+            "code": "<unchanged>",
+            "commands": [],
+            "confidence": 0.9,
+            "suggested_fix": "Align language/runtime version in CI workflow"
+        })
 
-    # Python version errors
-    if "python version" in error_log.lower():
-        return (
-            "<unchanged>",
-            "<unchanged>",
-            [],
-            0.9,
-            "Align Python version in CI workflow (uses/setup-python)"
-        )
+    # Shell / CI/CD command errors
+    if "command not found" in error_log.lower() or "exit code" in error_log.lower() or "bash:" in error_log.lower():
+        result.append({
+            "file": "<ci_pipeline>",
+            "code": "<unchanged>",
+            "commands": [],
+            "confidence": 0.7,
+            "suggested_fix": "Check shell commands, tool installation, environment variables, or CI pipeline"
+        })
 
-    # ------------------ FALLBACK: always suggest ------------------
-    suggested_fix = data.get("fix_explanation", "Manual investigation required")
-    return (
-        extract_traceback_file(error_log),
-        "<unchanged>",
-        [],
-        confidence,
-        suggested_fix
-    )
+    # fallback to LLM suggestion if nothing else
+    if not result:
+        result.append({
+            "file": extract_file(error_log),
+            "code": "<unchanged>",
+            "commands": [],
+            "confidence": float(suggestions[0].get("confidence", 0.6)),
+            "suggested_fix": suggestions[0].get("suggested_fix", "Manual investigation required")
+        })
+
+    return result
