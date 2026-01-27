@@ -12,7 +12,7 @@ from .llm import ask_llm
 from .cd_advisor import analyze_cd_failure
 
 # ------------------- FastAPI -------------------
-app = FastAPI(title="Universal CI/CD LLM Agent")
+app2= FastAPI(title="Universal CI/CD LLM Agent")
 
 # ------------------- Schemas -------------------
 class CIRequest(BaseModel):
@@ -43,7 +43,7 @@ def validate(cmd):
         return False
 
 # ------------------- CI Endpoint -------------------
-@app.post("/ci", response_model=CIResponse)
+@app2.post("/ci", response_model=CIResponse)
 def handle_ci(request: CIRequest):
     try:
         llm_output = ask_llm(request.log)  # CI JSON output
@@ -99,7 +99,7 @@ def handle_ci(request: CIRequest):
     )
 
 # ------------------- CD Endpoint -------------------
-@app.post("/cd", response_model=CDResponse)
+@app2.post("/cd", response_model=CDResponse)
 def handle_cd(request: CDRequest):
     try:
         explanation = analyze_cd_failure(request.log)
