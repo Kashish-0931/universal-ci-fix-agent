@@ -6,80 +6,47 @@ from groq import Groq
 
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
-SYSTEM_PROMPT = """
-You are an autonomous CI/CD Fixing Agent operating inside automated pipelines.
-
-TASK:
-Analyze CI/CD error logs and produce a minimal, deterministic fix or a safe suggestion.
-
-STRICT RULES:
-- NEVER hallucinate files, modules, or imports
-- NEVER invent filenames like unknown_file.py
-- NEVER modify files not mentioned in the traceback
-- Dependency errors MUST NOT create new files
-- Always be conservative and safe
-
-ERROR CLASSIFICATION:
-- ModuleNotFoundError → missing dependency
-- ImportError → missing dependency
-- NameError → typo or missing definition
-- SyntaxError → syntax issue
-- AssertionError → test failure
-- Other → unknown (give safe guidance)
-
-DEPENDENCY RULES:
-- If error is ModuleNotFoundError or ImportError:
-  - Root cause is missing dependency
-  - files_to_change MUST reference the exact file from traceback
-  - Code content must be unchanged
-  - command MUST include a pip install suggestion
-  - NEVER invent filenames
-
-FIX RULES:
-- Modify ONLY the file mentioned in the traceback
-- If no code change is required, return the file unchanged
-- Always provide fix_explanation
-- Always provide at least one safe suggestion
-
-OUTPUT:
-Return VALID JSON ONLY matching this schema:
-
-{
-  "error_type": "string",
-  "error_detected": "string",
-  "root_cause": "string",
-  "fix_explanation": "string",
-  "files_to_change": { "filename": "exact replacement content or <unchanged>" },
-  "command": ["safe shell commands"],
-  "confidence": number
-}
-"""
-
-# ------------------ HELPERS ------------------
-
+# ------------------ Helpers ------------------
 def extract_traceback_file(error_log: str) -> str | None:
-    """
-    Extract first file path from traceback.
-    """
     match = re.search(r'File "([^"]+\.py)"', error_log)
     if match:
         return match.group(1)
     return None
 
-
 def extract_missing_module(error_log: str) -> str | None:
-    """
-    Extract missing module name from ModuleNotFoundError.
-    """
     match = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_log)
     if match:
         return match.group(1)
     return None
 
-
-# ------------------ MAIN LLM CALL ------------------
-
+# ------------------ Main LLM Call ------------------
 def ask_llm(error_log: str):
+    SYSTEM_PROMPT = """
+You are an autonomous CI/CD fixing agent.
+
+TASK:
+Analyze any CI/CD error log and provide:
+- Root cause in simple terms
+- Safe minimal fix or suggestion
+- Do not modify files not mentioned in traceback
+- Never invent filenames or commands
+- Do not produce dangerous shell commands (rm, shutdown, reboot, mkfs, dd, kill, poweroff)
+- Only suggest `pip install <missing_module>` for ModuleNotFoundError / ImportError
+- Output must match EXACTLY this JSON schema:
+{
+  "error_type": "string",
+  "error_detected": "string",
+  "root_cause": "string",
+  "fix_explanation": "string",
+  "files_to_change": {
+    "filename": "exact replacement content or <unchanged>"
+  },
+  "command": ["safe shell commands"],
+  "confidence": number
+}
+If you cannot safely fix the issue, return "<unchanged>" for files_to_change and an empty command array.
+"""
+
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         temperature=0,
@@ -94,76 +61,43 @@ def ask_llm(error_log: str):
 
     data = json.loads(raw)
 
-    # ------------------ VALIDATION ------------------
-
     REQUIRED_KEYS = {
-        "error_type",
-        "error_detected",
-        "root_cause",
-        "fix_explanation",
-        "files_to_change",
-        "command",
-        "confidence"
+        "error_type", "error_detected", "root_cause", "fix_explanation",
+        "files_to_change", "command", "confidence"
     }
-
     missing = REQUIRED_KEYS - data.keys()
     if missing:
         raise ValueError(f"Missing required keys: {missing}")
 
-    if not isinstance(data["files_to_change"], dict):
-        raise ValueError("files_to_change must be an object")
-
-    if len(data["files_to_change"]) != 1:
-        raise ValueError("Exactly one file must be referenced")
-
+    # Extract file & code
+    if not isinstance(data["files_to_change"], dict) or len(data["files_to_change"]) != 1:
+        raise ValueError("files_to_change must reference exactly one file")
     filename, code = next(iter(data["files_to_change"].items()))
 
-    # 🚫 Block hallucinated filenames
-    if filename in ("unknown_file.py", "unknown.py", "file.py"):
-        raise ValueError("Hallucinated filename detected")
-
-    path = Path(filename)
-    if path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"Invalid file path: {filename}")
+    #  Block hallucinated filenames
+    if filename in ("unknown_file.py", "file.py", "unknown.py") or not filename.strip():
+        traceback_file = extract_traceback_file(error_log)
+        filename = traceback_file or "<unchanged>"
+        code = "<unchanged>"
+        print("Fallback applied due to hallucinated filename")
 
     # ------------------ COMMAND SAFETY ------------------
-
-    DANGEROUS_COMMANDS = {
-        "rm", "shutdown", "reboot", "mkfs",
-        "dd", "kill", "killall", "poweroff"
-    }
-
+    DANGEROUS_COMMANDS = {"rm", "shutdown", "reboot", "mkfs", "dd", "kill", "killall", "poweroff"}
     commands = data.get("command", [])
-    for cmd in commands:
-        if cmd.split()[0] in DANGEROUS_COMMANDS:
-            raise ValueError(f"Blocked dangerous command: {cmd}")
+    safe_commands = [cmd for cmd in commands if cmd.split()[0] not in DANGEROUS_COMMANDS]
+    commands = safe_commands
 
-    # ------------------ FALLBACK CORRECTIONS ------------------
-
-    error_type = data["error_type"]
-
-    # Dependency error fallback
-    if error_type in ("ModuleNotFoundError", "ImportError"):
+    # ------------------ Dependency fallback ------------------
+    if data["error_type"] in ("ModuleNotFoundError", "ImportError"):
         missing_module = extract_missing_module(error_log)
         traceback_file = extract_traceback_file(error_log)
-
-        if missing_module and not commands:
+        if missing_module:
             commands = [f"pip install {missing_module}"]
-
         if traceback_file:
             filename = traceback_file
             code = "<unchanged>"
 
-    # Always ensure suggestion exists
-    if commands:
-        suggested_fix = " && ".join(commands)
-    else:
-        suggested_fix = data["fix_explanation"]
+    # ------------------ Suggested fix ------------------
+    suggested_fix = " && ".join(commands) if commands else data.get("fix_explanation", "No safe fix available")
 
-    return (
-        filename,
-        code,
-        commands,
-        data["confidence"],
-        suggested_fix
-    )
+    return filename, code, commands, data["confidence"], suggested_fix
