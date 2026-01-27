@@ -43,6 +43,7 @@ def validate(cmd):
         return False
 
 # ------------------- CI Endpoint -------------------
+# ------------------- CI Endpoint -------------------
 @app2.post("/ci", response_model=CIResponse)
 def handle_ci(request: CIRequest):
     try:
@@ -50,17 +51,15 @@ def handle_ci(request: CIRequest):
 
         filename = next(iter(llm_output["files_to_change"].keys()))
         code = llm_output["files_to_change"][filename]
-        command = llm_output.get("command", [])
         confidence_score = llm_output.get("confidence", 0.0)
         error_type = llm_output.get("error_type", "ci")
 
-        if error_type in ("ModuleNotFoundError", "ImportError") and command:
-            suggested_fix = " && ".join(command)
-        else:
-            suggested_fix = llm_output.get(
-                "fix_explanation",
-                "Check the code around the reported line for errors."
-            )
+        # ------------------- Suggested fix -------------------
+        # Always use the code returned by LLM
+        suggested_fix = code if code != "<unchanged>" else llm_output.get(
+            "fix_explanation",
+            "Check the code around the reported line for errors."
+        )
 
     except Exception as e:
         return CIResponse(
@@ -77,11 +76,8 @@ def handle_ci(request: CIRequest):
         print(f"Patch failed: {e}")
         filename, code = "<unchanged>", "<unchanged>"
 
+    # Validation can ignore shell commands now
     validated = True
-    if error_type in ("ModuleNotFoundError", "ImportError") and command:
-        validated = validate(command)
-        if not validated:
-            confidence_score = round(confidence_score * 0.5, 2)
 
     try:
         pr_info = create_pr(filename, confidence_score)
@@ -97,6 +93,7 @@ def handle_ci(request: CIRequest):
         confidence=confidence_score,
         suggested_fix=suggested_fix
     )
+
 
 # ------------------- CD Endpoint -------------------
 @app2.post("/cd", response_model=CDResponse)
