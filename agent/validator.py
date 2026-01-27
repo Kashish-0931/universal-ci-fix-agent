@@ -21,12 +21,14 @@ class CIResponse(BaseModel):
     error_type: str
     files_changed: List[str]
     confidence: float
+    suggested_fix: str  # added
 
 class CDRequest(BaseModel):
     log: str
 
 class CDResponse(BaseModel):
     explanation: str
+    suggested_fix: str  # added
 
 # ------------------- Helper -------------------
 def validate(cmd):
@@ -47,11 +49,13 @@ def handle_ci(request: CIRequest):
     try:
         filename, code, command, confidence_score, suggested_fix = ask_llm(request.log)
     except Exception as e:
+        # fallback if LLM fails
         return CIResponse(
             status="ERROR",
             error_type="ci",
             files_changed=[],
-            confidence=0.0
+            confidence=0.0,
+            suggested_fix=f"LLM failed: {e}"
         )
 
     # Apply file changes safely
@@ -79,7 +83,8 @@ def handle_ci(request: CIRequest):
         status="PR_CREATED" if pr_url else "SUGGESTION_READY",
         error_type="ci",
         files_changed=[filename] if filename else [],
-        confidence=confidence_score
+        confidence=confidence_score,
+        suggested_fix=suggested_fix
     )
 
 # ------------------- CD Endpoint -------------------
@@ -87,9 +92,15 @@ def handle_ci(request: CIRequest):
 def handle_cd(request: CDRequest):
     try:
         explanation = analyze_cd_failure(request.log)
+        # For CD, suggested_fix can be the same as explanation or you can shorten it
+        suggested_fix = explanation
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return CDResponse(explanation=explanation)
+
+    return CDResponse(
+        explanation=explanation,
+        suggested_fix=suggested_fix
+    )
 
 # ------------------- Startup -------------------
 if __name__ == "__main__":
@@ -98,4 +109,3 @@ if __name__ == "__main__":
     os.environ.setdefault("GROQ_API_KEY", "<YOUR_GROQ_API_KEY>")
     os.environ.setdefault("GITHUB_REPOSITORY", "Kashish-0931/universal-ci-fix-agent")
     uvicorn.run("validator:app", host="0.0.0.0", port=8000, reload=True)
-
