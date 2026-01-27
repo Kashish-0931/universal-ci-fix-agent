@@ -109,4 +109,4 @@ If you cannot safely fix the issue, return "<unchanged>" for files_to_change and
 
     else:
         # Plain text for CD
-        return raw and it should work on any repo
+        return raw 
