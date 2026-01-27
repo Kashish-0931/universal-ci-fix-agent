@@ -1,55 +1,54 @@
 import os
 import json
 import re
-from pathlib import Path
 from groq import Groq
 
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 # ------------------ Helpers ------------------
-def extract_traceback_file(error_log: str) -> str | None:
-    match = re.search(r'File "([^"]+\.py)"', error_log)
-    if match:
-        return match.group(1)
-    return None
 
-def extract_missing_module(error_log: str) -> str | None:
-    match = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_log)
-    if match:
-        return match.group(1)
-    return None
+def extract_traceback_file(error_log: str):
+    m = re.search(r'File "([^"]+)"', error_log)
+    return m.group(1) if m else None
 
-# ------------------ Main LLM Call ------------------
+def extract_missing_module(error_log: str):
+    m = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_log)
+    return m.group(1) if m else None
+
+def extract_missing_file(error_log: str):
+    m = re.search(r"No such file or directory: ['\"]([^'\"]+)['\"]", error_log)
+    return m.group(1) if m else None
+
+# ------------------ Main ------------------
+
 def ask_llm(error_log: str, system_prompt: str = None, expect_json: bool = True):
     """
-    If expect_json=True, parse LLM output as CI JSON.
-    If expect_json=False, return plain text (for CD).
+    Returns:
+    filename, code, commands, confidence, suggested_fix
     """
+
     if system_prompt is None:
         system_prompt = """
-You are an autonomous CI/CD fixing agent.
+You are a CI/CD error classification agent.
 
 TASK:
-Analyze any CI/CD error log and provide:
-- Root cause in simple terms
-- Safe minimal fix or suggestion
-- Do not modify files not mentioned in traceback
-- Never invent filenames or commands
-- Do not produce dangerous shell commands (rm, shutdown, reboot, mkfs, dd, kill, poweroff)
-- Only suggest `pip install <missing_module>` for ModuleNotFoundError / ImportError
-- Output must match EXACTLY this JSON schema:
+Classify the error and explain it clearly.
+
+DO NOT:
+- invent files
+- suggest commands
+- suggest fixes
+
+Return STRICT JSON only.
+
+Schema:
 {
   "error_type": "string",
   "error_detected": "string",
   "root_cause": "string",
   "fix_explanation": "string",
-  "files_to_change": {
-    "filename": "exact replacement content or <unchanged>"
-  },
-  "command": ["safe shell commands"],
   "confidence": number
 }
-If you cannot safely fix the issue, return "<unchanged>" for files_to_change and an empty command array.
 """
 
     response = client.chat.completions.create(
@@ -64,49 +63,85 @@ If you cannot safely fix the issue, return "<unchanged>" for files_to_change and
     raw = response.choices[0].message.content.strip()
     print("\nRAW LLM OUTPUT:\n", raw)
 
-    if expect_json:
-        data = json.loads(raw)
+    if not expect_json:
+        return raw
 
-        REQUIRED_KEYS = {
-            "error_type", "error_detected", "root_cause", "fix_explanation",
-            "files_to_change", "command", "confidence"
-        }
-        missing = REQUIRED_KEYS - data.keys()
+    data = json.loads(raw)
+
+    error_type = data.get("error_type", "")
+    confidence = float(data.get("confidence", 0.6))
+
+    # ==========================================================
+    # 🔹 AUTO-FIXABLE ERRORS
+    # ==========================================================
+
+    # 1. Missing Python dependency
+    if error_type in ("ModuleNotFoundError", "ImportError"):
+        missing = extract_missing_module(error_log)
         if missing:
-            raise ValueError(f"Missing required keys: {missing}")
+            return (
+                "requirements.txt",
+                f"{missing}\n",
+                [],
+                1.0,
+                f"Add '{missing}' to requirements.txt"
+            )
 
-        # Extract file & code
-        if not isinstance(data["files_to_change"], dict) or len(data["files_to_change"]) != 1:
-            raise ValueError("files_to_change must reference exactly one file")
-        filename, code = next(iter(data["files_to_change"].items()))
+    # 2. Missing file
+    if error_type == "FileNotFoundError":
+        missing_file = extract_missing_file(error_log)
+        if missing_file:
+            return (
+                missing_file,
+                "",
+                [],
+                0.9,
+                f"Create missing file: {missing_file}"
+            )
 
-        # Block hallucinated filenames
-        if filename in ("unknown_file.py", "file.py", "unknown.py") or not filename.strip():
-            traceback_file = extract_traceback_file(error_log)
-            filename = traceback_file or "<unchanged>"
-            code = "<unchanged>"
+    # 3. Permission issue
+    if error_type == "PermissionError":
+        file = extract_traceback_file(error_log)
+        return (
+            file or "<unchanged>",
+            "<unchanged>",
+            [],
+            0.8,
+            "Fix file permissions in CI environment"
+        )
 
-        # ------------------ COMMAND SAFETY ------------------
-        DANGEROUS_COMMANDS = {"rm", "shutdown", "reboot", "mkfs", "dd", "kill", "killall", "poweroff"}
-        commands = data.get("command", [])
-        safe_commands = [cmd for cmd in commands if cmd.split()[0] not in DANGEROUS_COMMANDS]
-        commands = safe_commands
+    # 4. Python version issue
+    if "python version" in error_log.lower():
+        return (
+            "<unchanged>",
+            "<unchanged>",
+            [],
+            0.9,
+            "Align Python version in CI workflow (uses/setup-python)"
+        )
 
-        # ------------------ Dependency fallback ------------------
-        if data["error_type"] in ("ModuleNotFoundError", "ImportError"):
-            missing_module = extract_missing_module(error_log)
-            traceback_file = extract_traceback_file(error_log)
-            if missing_module:
-                commands = [f"pip install {missing_module}"]
-            if traceback_file:
-                filename = traceback_file
-                code = "<unchanged>"
+    # 5. YAML / JSON config errors
+    if error_type in ("YAMLError", "JSONDecodeError"):
+        file = extract_traceback_file(error_log)
+        return (
+            file or "<unchanged>",
+            "<unchanged>",
+            [],
+            0.8,
+            "Fix syntax error in configuration file"
+        )
 
-        # ------------------ Suggested fix ------------------
-        suggested_fix = " && ".join(commands) if commands else data.get("fix_explanation", "No safe fix available")
+    # ==========================================================
+    # 🔸 NON-DETERMINISTIC (SUGGEST ONLY)
+    # ==========================================================
 
-        return filename, code, commands, data["confidence"], suggested_fix
+    traceback_file = extract_traceback_file(error_log)
 
-    else:
-        # Plain text for CD
-        return raw 
+    return (
+        traceback_file or "<unchanged>",
+        "<unchanged>",
+        [],
+        confidence,
+        data.get("fix_explanation", "Manual investigation required")
+    )
+
