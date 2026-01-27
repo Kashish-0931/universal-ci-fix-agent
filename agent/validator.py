@@ -21,24 +21,21 @@ class CIResponse(BaseModel):
     error_type: str
     files_changed: List[str]
     confidence: float
-    suggested_fix: str  # added
+    suggested_fix: str
 
 class CDRequest(BaseModel):
     log: str
 
 class CDResponse(BaseModel):
     explanation: str
-    suggested_fix: str  # added
+    suggested_fix: str
 
 # ------------------- Helper -------------------
 def validate(cmd):
-    """Run a shell command and return True if successful."""
     try:
         if not cmd or len(cmd) == 0:
             return False
-        result = subprocess.run(
-            cmd, capture_output=True, timeout=600, cwd=os.getcwd()
-        )
+        result = subprocess.run(cmd, capture_output=True, timeout=600, cwd=os.getcwd())
         return result.returncode == 0
     except Exception:
         return False
@@ -47,29 +44,23 @@ def validate(cmd):
 @app.post("/ci", response_model=CIResponse)
 def handle_ci(request: CIRequest):
     try:
-        # 1️⃣ Get raw LLM JSON output
-        llm_output = ask_llm(request.log)
+        llm_output = ask_llm(request.log)  # CI JSON output
 
-        # 2️⃣ Extract file and code
         filename = next(iter(llm_output["files_to_change"].keys()))
         code = llm_output["files_to_change"][filename]
         command = llm_output.get("command", [])
         confidence_score = llm_output.get("confidence", 0.0)
         error_type = llm_output.get("error_type", "ci")
 
-        # 3️⃣ Safe suggested fix logic
         if error_type in ("ModuleNotFoundError", "ImportError") and command:
-            # Only dependency errors can run commands
             suggested_fix = " && ".join(command)
         else:
-            # For SyntaxError, NameError, AssertionError, RuntimeError, etc.
             suggested_fix = llm_output.get(
                 "fix_explanation",
                 "Check the code around the reported line for errors."
             )
 
     except Exception as e:
-        # fallback if LLM fails
         return CIResponse(
             status="ERROR",
             error_type="ci",
@@ -78,22 +69,18 @@ def handle_ci(request: CIRequest):
             suggested_fix=f"LLM failed: {e}"
         )
 
-    # 4️⃣ Apply file changes safely
     try:
         apply_patch(filename, code)
     except Exception as e:
         print(f"Patch failed: {e}")
         filename, code = "<unchanged>", "<unchanged>"
 
-    # 5️⃣ Validate command only if it's a dependency fix
     validated = True
     if error_type in ("ModuleNotFoundError", "ImportError") and command:
         validated = validate(command)
         if not validated:
-            print("Dependency fix did not pass validation")
             confidence_score = round(confidence_score * 0.5, 2)
 
-    # 6️⃣ Create PR if validated
     try:
         pr_info = create_pr(filename, confidence_score)
         pr_url = pr_info.get("pr_url", "")
@@ -101,7 +88,6 @@ def handle_ci(request: CIRequest):
         print(f"PR creation failed: {e}")
         pr_url = ""
 
-    # 7️⃣ Return CI response
     return CIResponse(
         status="PR_CREATED" if pr_url else "SUGGESTION_READY",
         error_type=error_type,
@@ -110,13 +96,11 @@ def handle_ci(request: CIRequest):
         suggested_fix=suggested_fix
     )
 
-
 # ------------------- CD Endpoint -------------------
 @app.post("/cd", response_model=CDResponse)
 def handle_cd(request: CDRequest):
     try:
         explanation = analyze_cd_failure(request.log)
-        # Safe suggested fix = explanation itself
         suggested_fix = explanation
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -126,11 +110,10 @@ def handle_cd(request: CDRequest):
         suggested_fix=suggested_fix
     )
 
-
 # ------------------- Startup -------------------
 if __name__ == "__main__":
     import uvicorn
-    # Environment variable fallbacks
     os.environ.setdefault("GROQ_API_KEY", "<YOUR_GROQ_API_KEY>")
     os.environ.setdefault("GITHUB_REPOSITORY", "Kashish-0931/universal-ci-fix-agent")
     uvicorn.run("validator:app", host="0.0.0.0", port=8000, reload=True)
+
