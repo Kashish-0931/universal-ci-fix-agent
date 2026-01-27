@@ -76,10 +76,9 @@ Return JSON only:
     error_type = data.get("error_type", "UnknownError")
     confidence = float(data.get("confidence", 0.6))
 
-    # ==========================================================
-    # AUTO-FIXABLE ERRORS
-    # ==========================================================
-    # 1. Missing Python dependency
+    # ------------------ AUTO-FIXABLE ------------------
+
+    # ModuleNotFoundError / ImportError
     if error_type in ("ModuleNotFoundError", "ImportError"):
         missing = extract_missing_module(error_log)
         if missing:
@@ -91,7 +90,7 @@ Return JSON only:
                 f"Add '{missing}' to requirements.txt"
             )
 
-    # 2. Missing file
+    # FileNotFoundError
     if error_type == "FileNotFoundError":
         missing_file = extract_missing_file(error_log)
         if missing_file:
@@ -103,7 +102,7 @@ Return JSON only:
                 f"Create missing file: {missing_file}"
             )
 
-    # 3. Permission issue
+    # PermissionError
     if error_type == "PermissionError":
         file = extract_traceback_file(error_log)
         return (
@@ -114,32 +113,7 @@ Return JSON only:
             "Fix file permissions in CI environment"
         )
 
-    # 4. Python version issue
-    if "python version" in error_log.lower():
-        return (
-            "<unchanged>",
-            "<unchanged>",
-            [],
-            0.9,
-            "Align Python version in CI workflow (uses/setup-python)"
-        )
-
-    # 5. YAML / JSON config errors
-    if error_type in ("YAMLError", "JSONDecodeError"):
-        file = extract_traceback_file(error_log)
-        return (
-            file,
-            "<unchanged>",
-            [],
-            0.8,
-            "Fix syntax error in configuration file"
-        )
-
-    # ==========================================================
-    # NON-DETERMINISTIC / ALWAYS SUGGEST
-    # ==========================================================
-
-    # NameError
+    # NameError: always suggest
     if error_type == "NameError":
         undefined_name, suggested_name = extract_nameerror_details(error_log)
         suggested_fix = (f"Function or variable name mismatch: {suggested_name} vs {undefined_name}"
@@ -152,7 +126,28 @@ Return JSON only:
             suggested_fix
         )
 
-    # Generic fallback
+    # YAML/JSON errors
+    if error_type in ("YAMLError", "JSONDecodeError"):
+        file = extract_traceback_file(error_log)
+        return (
+            file,
+            "<unchanged>",
+            [],
+            0.8,
+            "Fix syntax error in configuration file"
+        )
+
+    # Python version errors
+    if "python version" in error_log.lower():
+        return (
+            "<unchanged>",
+            "<unchanged>",
+            [],
+            0.9,
+            "Align Python version in CI workflow (uses/setup-python)"
+        )
+
+    # ------------------ FALLBACK: always suggest ------------------
     suggested_fix = data.get("fix_explanation", "Manual investigation required")
     return (
         extract_traceback_file(error_log),
