@@ -47,24 +47,24 @@ def validate(cmd):
 @app.post("/ci", response_model=CIResponse)
 def handle_ci(request: CIRequest):
     try:
-        # Get raw LLM JSON
+        # 1️ Get raw LLM JSON output
         llm_output = ask_llm(request.log)
 
-        # Extract file and code
+        # 2️ Extract file and code
         filename = next(iter(llm_output["files_to_change"].keys()))
         code = llm_output["files_to_change"][filename]
-
-        # Extract other fields
         command = llm_output.get("command", [])
         confidence_score = llm_output.get("confidence", 0.0)
         error_type = llm_output.get("error_type", "ci")
 
-        # Safe suggested fix logic
+        # 3️ <<--- Add the safe suggested fix logic HERE
         if error_type in ("ModuleNotFoundError", "ImportError") and command:
-            suggested_fix = " && ".join(command)  # pip install
+            suggested_fix = " && ".join(command)
         else:
-            # For SyntaxError, NameError, AssertionError, RuntimeError
-            suggested_fix = llm_output.get("fix_explanation", "Check the code around the reported line for errors.")
+            suggested_fix = llm_output.get(
+                "fix_explanation",
+                "Check the code around the reported line for errors."
+            )
 
     except Exception as e:
         # fallback if LLM fails
@@ -76,20 +76,20 @@ def handle_ci(request: CIRequest):
             suggested_fix=f"LLM failed: {e}"
         )
 
-    # Apply file changes safely
+    # 4️ Apply file changes safely
     try:
         apply_patch(filename, code)
     except Exception as e:
         print(f"Patch failed: {e}")
         filename, code = "<unchanged>", "<unchanged>"
 
-    # Validate command
+    # 5️ Validate command
     validated = validate(command)
     if not validated:
         print("Fix did not pass validation")
-        confidence_score = round(confidence_score * 0.5, 2)  # reduce confidence
+        confidence_score = round(confidence_score * 0.5, 2)
 
-    # Create PR if validated
+    # 6️ Create PR if validated
     try:
         pr_info = create_pr(filename, confidence_score)
         pr_url = pr_info.get("pr_url", "")
@@ -97,6 +97,7 @@ def handle_ci(request: CIRequest):
         print(f"PR creation failed: {e}")
         pr_url = ""
 
+    # 7️ Return response
     return CIResponse(
         status="PR_CREATED" if pr_url else "SUGGESTION_READY",
         error_type=error_type,
