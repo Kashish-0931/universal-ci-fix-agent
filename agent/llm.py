@@ -9,7 +9,7 @@ client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 def extract_traceback_file(error_log: str):
     m = re.search(r'File "([^"]+)"', error_log)
-    return m.group(1) if m else None
+    return m.group(1) if m else "<unknown>"
 
 def extract_missing_module(error_log: str):
     m = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_log)
@@ -18,6 +18,15 @@ def extract_missing_module(error_log: str):
 def extract_missing_file(error_log: str):
     m = re.search(r"No such file or directory: ['\"]([^'\"]+)['\"]", error_log)
     return m.group(1) if m else None
+
+def extract_nameerror_details(error_log: str):
+    m = re.search(r"NameError: name '([^']+)' is not defined", error_log)
+    if m:
+        undefined_name = m.group(1)
+        suggestion_match = re.search(r"Did you mean: '([^']+)'", error_log)
+        suggested_name = suggestion_match.group(1) if suggestion_match else "<unknown>"
+        return undefined_name, suggested_name
+    return None, None
 
 # ------------------ Main ------------------
 
@@ -29,19 +38,15 @@ def ask_llm(error_log: str, system_prompt: str = None, expect_json: bool = True)
 
     if system_prompt is None:
         system_prompt = """
-You are a CI/CD error classification agent.
+You are a CI/CD error fixing agent.
 
 TASK:
-Classify the error and explain it clearly.
+- Analyze the error log
+- Always provide a suggested fix
+- Safe minimal changes only
+- Do not invent dangerous commands or files
 
-DO NOT:
-- invent files
-- suggest commands
-- suggest fixes
-
-Return STRICT JSON only.
-
-Schema:
+Return JSON only:
 {
   "error_type": "string",
   "error_detected": "string",
@@ -68,13 +73,12 @@ Schema:
 
     data = json.loads(raw)
 
-    error_type = data.get("error_type", "")
+    error_type = data.get("error_type", "UnknownError")
     confidence = float(data.get("confidence", 0.6))
 
     # ==========================================================
-    # 🔹 AUTO-FIXABLE ERRORS
+    # AUTO-FIXABLE ERRORS
     # ==========================================================
-
     # 1. Missing Python dependency
     if error_type in ("ModuleNotFoundError", "ImportError"):
         missing = extract_missing_module(error_log)
@@ -103,7 +107,7 @@ Schema:
     if error_type == "PermissionError":
         file = extract_traceback_file(error_log)
         return (
-            file or "<unchanged>",
+            file,
             "<unchanged>",
             [],
             0.8,
@@ -124,7 +128,7 @@ Schema:
     if error_type in ("YAMLError", "JSONDecodeError"):
         file = extract_traceback_file(error_log)
         return (
-            file or "<unchanged>",
+            file,
             "<unchanged>",
             [],
             0.8,
@@ -132,16 +136,28 @@ Schema:
         )
 
     # ==========================================================
-    # 🔸 NON-DETERMINISTIC (SUGGEST ONLY)
+    # NON-DETERMINISTIC / ALWAYS SUGGEST
     # ==========================================================
 
-    traceback_file = extract_traceback_file(error_log)
+    # NameError
+    if error_type == "NameError":
+        undefined_name, suggested_name = extract_nameerror_details(error_log)
+        suggested_fix = (f"Function or variable name mismatch: {suggested_name} vs {undefined_name}"
+                         if undefined_name else "Check undefined name in code")
+        return (
+            extract_traceback_file(error_log),
+            "<unchanged>",
+            [],
+            0.7,
+            suggested_fix
+        )
 
+    # Generic fallback
+    suggested_fix = data.get("fix_explanation", "Manual investigation required")
     return (
-        traceback_file or "<unchanged>",
+        extract_traceback_file(error_log),
         "<unchanged>",
         [],
         confidence,
-        data.get("fix_explanation", "Manual investigation required")
+        suggested_fix
     )
-
