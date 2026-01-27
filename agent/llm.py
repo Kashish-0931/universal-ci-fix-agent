@@ -8,32 +8,22 @@ client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 # ------------------ Helpers ------------------
 def extract_traceback_file(error_log: str) -> str | None:
-    """Extract the Python file from a traceback."""
     match = re.search(r'File "([^"]+\.py)"', error_log)
     if match:
         return match.group(1)
     return None
 
-
 def extract_missing_module(error_log: str) -> str | None:
-    """Extract missing module name from ImportError or ModuleNotFoundError."""
     match = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_log)
     if match:
         return match.group(1)
     return None
 
-
 # ------------------ Main LLM Call ------------------
 def ask_llm(error_log: str, system_prompt: str = None, expect_json: bool = True):
     """
-    Query LLM to analyze CI/CD errors and return safe code-based suggestions.
-
-    Returns:
-        filename: str
-        code: str
-        commands: list (always empty for safety)
-        confidence: float
-        suggested_fix: str
+    If expect_json=True, parse LLM output as CI JSON.
+    If expect_json=False, return plain text (for CD).
     """
     if system_prompt is None:
         system_prompt = """
@@ -62,7 +52,6 @@ Analyze any CI/CD error log and provide:
 If you cannot safely fix the issue, return "<unchanged>" for files_to_change and an empty command array.
 """
 
-    # Call LLM
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         temperature=0,
@@ -86,46 +75,38 @@ If you cannot safely fix the issue, return "<unchanged>" for files_to_change and
         if missing:
             raise ValueError(f"Missing required keys: {missing}")
 
-        # Extract filename and code
+        # Extract file & code
         if not isinstance(data["files_to_change"], dict) or len(data["files_to_change"]) != 1:
             raise ValueError("files_to_change must reference exactly one file")
         filename, code = next(iter(data["files_to_change"].items()))
 
-        # Replace unknown/hallucinated filenames with traceback info
+        # Block hallucinated filenames
         if filename in ("unknown_file.py", "file.py", "unknown.py") or not filename.strip():
             traceback_file = extract_traceback_file(error_log)
             filename = traceback_file or "<unchanged>"
             code = "<unchanged>"
 
-        # Ignore any shell commands completely
-        commands = []
+        # ------------------ COMMAND SAFETY ------------------
+        DANGEROUS_COMMANDS = {"rm", "shutdown", "reboot", "mkfs", "dd", "kill", "killall", "poweroff"}
+        commands = data.get("command", [])
+        safe_commands = [cmd for cmd in commands if cmd.split()[0] not in DANGEROUS_COMMANDS]
+        commands = safe_commands
 
-        # Dependency fallback for missing modules
+        # ------------------ Dependency fallback ------------------
         if data["error_type"] in ("ModuleNotFoundError", "ImportError"):
             missing_module = extract_missing_module(error_log)
             traceback_file = extract_traceback_file(error_log)
             if missing_module:
-                # Provide pip install suggestion in explanation, not as shell command
-                data["fix_explanation"] = f"Install missing module: {missing_module}"
+                commands = [f"pip install {missing_module}"]
             if traceback_file:
                 filename = traceback_file
                 code = "<unchanged>"
 
         # ------------------ Suggested fix ------------------
-        # Provide code-based suggestion
-        if code == "<unchanged>" or not code.strip():
-            match = re.search(r'File "[^"]+", line \d+\n\s*(.+)', error_log)
-            code_line = match.group(1).strip() if match else "Check the code near reported line"
-            suggested_fix = code_line
-        else:
-            suggested_fix = code
+        suggested_fix = " && ".join(commands) if commands else data.get("fix_explanation", "No safe fix available")
 
-        # Confidence fallback
-        confidence = data.get("confidence", 0.5)
-
-        return filename, code, commands, confidence, suggested_fix
+        return filename, code, commands, data["confidence"], suggested_fix
 
     else:
-        # Plain text mode (for CD)
-        return raw
-
+        # Plain text for CD
+        return raw and it should work on any repo
