@@ -39,9 +39,6 @@ def root():
 
 @app2.post("/ci")
 def handle_ci(request: CIRequest):
-    # Initialize defaults
-    @app2.post("/ci")
-def handle_ci(request: CIRequest):
     pr_url = ""
     try:
         # 1️⃣ Ask LLM for analysis
