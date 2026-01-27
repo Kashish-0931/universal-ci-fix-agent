@@ -47,7 +47,25 @@ def validate(cmd):
 @app.post("/ci", response_model=CIResponse)
 def handle_ci(request: CIRequest):
     try:
-        filename, code, command, confidence_score, suggested_fix = ask_llm(request.log)
+        # Get raw LLM JSON
+        llm_output = ask_llm(request.log)
+
+        # Extract file and code
+        filename = next(iter(llm_output["files_to_change"].keys()))
+        code = llm_output["files_to_change"][filename]
+
+        # Extract other fields
+        command = llm_output.get("command", [])
+        confidence_score = llm_output.get("confidence", 0.0)
+        error_type = llm_output.get("error_type", "ci")
+
+        # Safe suggested fix logic
+        if error_type in ("ModuleNotFoundError", "ImportError") and command:
+            suggested_fix = " && ".join(command)  # pip install
+        else:
+            # For SyntaxError, NameError, AssertionError, RuntimeError
+            suggested_fix = llm_output.get("fix_explanation", "Check the code around the reported line for errors.")
+
     except Exception as e:
         # fallback if LLM fails
         return CIResponse(
@@ -81,11 +99,12 @@ def handle_ci(request: CIRequest):
 
     return CIResponse(
         status="PR_CREATED" if pr_url else "SUGGESTION_READY",
-        error_type="ci",
+        error_type=error_type,
         files_changed=[filename] if filename else [],
         confidence=confidence_score,
         suggested_fix=suggested_fix
     )
+
 
 # ------------------- CD Endpoint -------------------
 @app.post("/cd", response_model=CDResponse)
